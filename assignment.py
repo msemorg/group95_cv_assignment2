@@ -1,9 +1,57 @@
 import glm
 import random
 import numpy as np
-
+import cv2
+import os
 block_size = 1.0
 
+def load_data(cam_id):
+    # loads the data from the xml files into a format that opencv can use
+    fs = cv2.FileStorage(f'data/cam{cam_id}/config.xml', cv2.FILE_STORAGE_READ)
+    camera_matrix = fs.getNode("camera_matrix").mat()
+    dist_coeffs = fs.getNode("distortion_coeffiecients").mat()
+    rvec = fs.getNode("rotation_vector").mat()
+    tvec = fs.getNode("translation_vector").mat()
+    fs.release()
+    return camera_matrix, dist_coeffs, rvec, tvec
+
+def create_and_save_masks():
+    # background subtraction, creates masks
+    for i in range(1, 5):
+        # load background and current video frame
+        cap_bg = cv2.VideoCapture(f'data/cam{i}/background.avi')
+        cap_vid = cv2.VideoCapture(f'data/cam{i}/video.avi')
+        
+        # grab the first frame of background
+        _, background_frame = cap_bg.read()
+        _, video_frame = cap_vid.read()
+        
+        # convert to HSV 
+        bg_hsv = cv2.cvtColor(background_frame, cv2.COLOR_BGR2HSV)
+        vid_hsv = cv2.cvtColor(video_frame, cv2.COLOR_BGR2HSV)
+        
+        # calculate absolute difference and threshold 
+        diff = cv2.absdiff(bg_hsv, vid_hsv)
+        
+        # thresholds 
+        lower_thresh = np.array([0, 50, 50])
+        upper_thresh = np.array([180, 255, 255])
+        
+        mask = cv2.inRange(diff, lower_thresh, upper_thresh)
+
+        cv2.imwrite(f'data/cam{i}/mask.png', mask)
+        
+        cap_bg.release()
+        cap_vid.release()
+#create_and_save_masks()
+
+def foreground_masks():
+    # loads the masks created 
+    masks = []
+    for i in range(1,5):
+        mask = cv2.imread(f'data/cam{i}/mask.png', cv2.IMREAD_GRAYSCALE)
+        masks.append(mask)
+    return masks
 
 def generate_grid(width, depth):
     # Generates the floor grid locations
@@ -20,6 +68,7 @@ def set_voxel_positions(width, height, depth):
     # Generates random voxel locations
     # TODO: You need to calculate proper voxel arrays instead of random ones.
     data, colors = [], []
+    masks = foreground_masks()
     for x in range(width):
         for y in range(height):
             for z in range(depth):
