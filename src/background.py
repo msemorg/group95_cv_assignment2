@@ -122,5 +122,13 @@ for i in range(1, video_count + 1):
     if TUNE_BACKGROUND_SUBTRACTION:
         print(f"Tuning background subtraction for Camera {i}...")
         bg_model = cv.imread(f"data/cam{i}/bg_model.png")
+        #BGR is too sensitive to lighting changes, whereas HSV separates color from brightness which separates easier
         tune_background_subtraction(f"data/cam{i}/video.avi", bg_model)
+        # results from tuning: TODO: safe this to some file perhaps?     
 
+        tuned_thresholds = {
+            1: (54, 68, 75),
+            2: (19, 47, 87),
+            3: (14, 31, 73),
+            4: (24, 73, 78)
+        }
