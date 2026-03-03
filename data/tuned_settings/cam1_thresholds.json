@@ -1,0 +1,5 @@
+{
+    "H_Thresh": 255,
+    "S_Thresh": 28,
+    "V_Thresh": 97
+}
