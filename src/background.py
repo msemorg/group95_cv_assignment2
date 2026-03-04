@@ -5,28 +5,31 @@ import cv2 as cv
 
 # Grid dimensions
 width, height, depth = 128, 64, 128
-SQUARE_SIZE = 250 # mm
-TUNE_BACKGROUND_SUBTRACTION = True # Set to True to enable interactive tuning of background subtraction thresholds
-
+SQUARE_SIZE = 200  # mm
+TUNE_BACKGROUND_SUBTRACTION = False  # Set to True to enable interactive tuning of background subtraction thresholds
 # Create ranges centered around (0,0,0) on the floor
-x_range = np.arange(-width//2, width//2) * SQUARE_SIZE
-y_range = np.arange(-height, 0) * SQUARE_SIZE # Negative because engine uses Y-up
-z_range = np.arange(-depth//2, depth//2) * SQUARE_SIZE
+x_range = np.arange(-width // 2, width // 2) * SQUARE_SIZE
+y_range = np.arange(-height, 0) * SQUARE_SIZE  # Negative because engine uses Y-up
+z_range = np.arange(-depth // 2, depth // 2) * SQUARE_SIZE
 
 # Create the 3D grid of points
-z, y, x = np.meshgrid(z_range, y_range, x_range, indexing='ij')
+z, y, x = np.meshgrid(z_range, y_range, x_range, indexing="ij")
 voxel_coords = np.stack((x.ravel(), y.ravel(), z.ravel()), axis=1).astype(np.float32)
+
+
 # This function creates a background model by taking the median of all frames' pixel values.
 def create_background_model(video_path):
     cap = cv.VideoCapture(video_path)
     frames = []
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
         frames.append(frame)
     cap.release()
     # Calculate median across all frames for a clean background
     return np.median(frames, axis=0).astype(np.uint8)
+
 
 def get_foreground_mask(frame, background_model, thresholds):
     """
@@ -54,14 +57,16 @@ def get_foreground_mask(frame, background_model, thresholds):
     # 2. MORPHOLOGICAL CLEANUP (PRE-PROCESSING FOR BLOB DETECTION)
     # We use a 5x5 elliptical kernel to bridge small gaps so limbs stay connected to the body
     kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
-    
+
     # Close internal holes first
     mask_processed = cv.morphologyEx(mask_before, cv.MORPH_CLOSE, kernel, iterations=2)
 
     # 3. CONNECTED COMPONENTS ANALYSIS
     # This finds every "island" of white pixels and labels them
     # stats contains the AREA of each island
-    num_labels, labels, stats, _ = cv.connectedComponentsWithStats(mask_processed, connectivity=8)
+    num_labels, labels, stats, _ = cv.connectedComponentsWithStats(
+        mask_processed, connectivity=8
+    )
 
     # Create an empty black image to draw only our "main" subject
     mask_after = np.zeros_like(mask_processed)
@@ -70,10 +75,10 @@ def get_foreground_mask(frame, background_model, thresholds):
     if num_labels > 1:
         # Get areas of all blobs except the background (index 0)
         blob_areas = stats[1:, cv.CC_STAT_AREA]
-        
+
         # Find the index of the largest blob
         largest_label = 1 + np.argmax(blob_areas)
-        
+
         # Only keep the pixels belonging to the largest blob
         mask_after[labels == largest_label] = 255
 
@@ -83,9 +88,10 @@ def get_foreground_mask(frame, background_model, thresholds):
 
     return mask_before, mask_after
 
+
 def tune_background_subtraction(video_path, background_model, cam_id, save_dir):
     cap = cv.VideoCapture(video_path)
-    window_name = f"Tuning_Cam_{cam_id}"
+    window_name = f"TTTTuning_Cam_{cam_id}"
     cv.namedWindow(window_name)
 
     cv.createTrackbar("H_Thresh", window_name, 10, 255, lambda x: None)
@@ -107,12 +113,14 @@ def tune_background_subtraction(video_path, background_model, cam_id, save_dir):
         v_t = cv.getTrackbarPos("V_Thresh", window_name)
 
         # Receive both masks
-        m_before, m_after = get_foreground_mask(frame, background_model, (h_t, s_t, v_t))
+        m_before, m_after = get_foreground_mask(
+            frame, background_model, (h_t, s_t, v_t)
+        )
 
         cv.imshow("Foreground Mask (After)", m_after)
         cv.imshow("Original", frame)
 
-        if cv.waitKey(30) & 0xFF == ord('q'):
+        if cv.waitKey(30) & 0xFF == ord("q"):
             final_thresholds = (h_t, s_t, v_t)
             final_mask_before = m_before.copy()
             final_mask_after = m_after.copy()
@@ -125,19 +133,30 @@ def tune_background_subtraction(video_path, background_model, cam_id, save_dir):
         os.makedirs(save_dir, exist_ok=True)
 
         # Saving both versions
-        cv.imwrite(os.path.join(save_dir, f"cam{cam_id}_mask_before_postprocessing.png"), final_mask_before)
-        cv.imwrite(os.path.join(save_dir, f"cam{cam_id}_mask_after_postprocessing.png"), final_mask_after)
+        cv.imwrite(
+            os.path.join(save_dir, f"cam{cam_id}_mask_before_postprocessing.png"),
+            final_mask_before,
+        )
+        cv.imwrite(
+            os.path.join(save_dir, f"cam{cam_id}_mask_after_postprocessing.png"),
+            final_mask_after,
+        )
 
         settings_path = os.path.join(save_dir, f"cam{cam_id}_thresholds.json")
         with open(settings_path, "w") as f:
-            json.dump({
-                "H_Thresh": final_thresholds[0],
-                "S_Thresh": final_thresholds[1],
-                "V_Thresh": final_thresholds[2]
-            }, f, indent=4)
+            json.dump(
+                {
+                    "H_Thresh": final_thresholds[0],
+                    "S_Thresh": final_thresholds[1],
+                    "V_Thresh": final_thresholds[2],
+                },
+                f,
+                indent=4,
+            )
 
         return final_thresholds
     return None
+
 
 def load_camera_params(path):
     fs = cv.FileStorage(path, cv.FILE_STORAGE_READ)
@@ -156,21 +175,17 @@ def load_camera_params(path):
     return mtx, dist, rvec, tvec
 
 
-
-#calculate background model for each camera and save it as an image for later use in foreground extraction
+# calculate background model for each camera and save it as an image for later use in foreground extraction
 video_count = 4
 for i in range(1, video_count + 1):
     bg_path = f"data/cam{i}/background.avi"
     model = create_background_model(bg_path)
     cv.imwrite(f"data/cam{i}/bg_model.png", model)
 
-         # Run this once for each camera to find the H, S, V cut-off point
+    # Run this once for each camera to find the H, S, V cut-off point
     if TUNE_BACKGROUND_SUBTRACTION:
-        #BGR is too sensitive to lighting changes, whereas HSV separates color from brightness which separates easier
+        # BGR is too sensitive to lighting changes, whereas HSV separates color from brightness which separates easier
         bg_model = cv.imread(f"data/cam{i}/bg_model.png")
         thresholds = tune_background_subtraction(
-            f"data/cam{i}/video.avi",
-            bg_model,
-            cam_id=i,
-            save_dir="data/tuned_settings"
+            f"data/cam{i}/video.avi", bg_model, cam_id=i, save_dir="data/tuned_settings"
         )
