@@ -3,55 +3,9 @@ import random
 import numpy as np
 import cv2
 import os
+from src.voxel import build_lookup_table, reconstruct_voxels, convert_to_render_format, load_camera_parameters,generate_voxel_grid
 block_size = 1.0
 
-def load_data(cam_id):
-    # loads the data from the xml files into a format that opencv can use
-    fs = cv2.FileStorage(f'data/cam{cam_id}/config.xml', cv2.FILE_STORAGE_READ)
-    camera_matrix = fs.getNode("camera_matrix").mat()
-    dist_coeffs = fs.getNode("distortion_coeffiecients").mat()
-    rvec = fs.getNode("rotation_vector").mat()
-    tvec = fs.getNode("translation_vector").mat()
-    fs.release()
-    return camera_matrix, dist_coeffs, rvec, tvec
-
-def create_and_save_masks():
-    # background subtraction, creates masks
-    for i in range(1, 5):
-        # load background and current video frame
-        cap_bg = cv2.VideoCapture(f'data/cam{i}/background.avi')
-        cap_vid = cv2.VideoCapture(f'data/cam{i}/video.avi')
-        
-        # grab the first frame of background
-        _, background_frame = cap_bg.read()
-        _, video_frame = cap_vid.read()
-        
-        # convert to HSV 
-        bg_hsv = cv2.cvtColor(background_frame, cv2.COLOR_BGR2HSV)
-        vid_hsv = cv2.cvtColor(video_frame, cv2.COLOR_BGR2HSV)
-        
-        # calculate absolute difference and threshold 
-        diff = cv2.absdiff(bg_hsv, vid_hsv)
-        
-        # thresholds 
-        lower_thresh = np.array([0, 50, 50])
-        upper_thresh = np.array([180, 255, 255])
-        
-        mask = cv2.inRange(diff, lower_thresh, upper_thresh)
-
-        cv2.imwrite(f'data/cam{i}/mask.png', mask)
-        
-        cap_bg.release()
-        cap_vid.release()
-#create_and_save_masks()
-
-def foreground_masks():
-    # loads the masks created 
-    masks = []
-    for i in range(1,5):
-        mask = cv2.imread(f'data/cam{i}/mask.png', cv2.IMREAD_GRAYSCALE)
-        masks.append(mask)
-    return masks
 
 def generate_grid(width, depth):
     # Generates the floor grid locations
@@ -65,16 +19,38 @@ def generate_grid(width, depth):
 
 
 def set_voxel_positions(width, height, depth):
-    # Generates random voxel locations
-    # TODO: You need to calculate proper voxel arrays instead of random ones.
-    data, colors = [], []
-    masks = foreground_masks()
-    for x in range(width):
-        for y in range(height):
-            for z in range(depth):
-                if random.randint(0, 1000) < 5:
-                    data.append([x*block_size - width/2, y*block_size, z*block_size - depth/2])
-                    colors.append([x / width, z / depth, y / height])
+
+    print("[DEBUG] Starting full reconstruction pipeline...")
+
+    camera_params = load_camera_parameters()
+    voxels = generate_voxel_grid(width, height, depth)
+
+    silhouettes = []
+    for cam_id in range(1, 5):
+        silhouette_path = f"data/tuned_settings/cam{cam_id}_mask.png"        
+        sil = cv2.imread(silhouette_path, 0)
+        silhouettes.append(sil)
+
+    lookup_table = build_lookup_table(
+        voxels,
+        camera_params,
+        silhouettes[0].shape
+    )
+
+    active_voxels = reconstruct_voxels(
+        voxels,
+        lookup_table,
+        silhouettes
+    )
+
+    data, colors = convert_to_render_format(
+        active_voxels,
+        width,
+        height,
+        depth
+    )
+
+    print("[DEBUG] Reconstruction complete.")
     return data, colors
 
 
