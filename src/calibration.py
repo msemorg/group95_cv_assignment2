@@ -6,10 +6,8 @@ import numpy as np
 import json
 import shutil
 
-# create images from the intrinsics video for each camera, to be used for calibration
-# 'False' as the images are already created, and manually filtered through.
 CREATE_VIDEO_STILLS = False
-MANUAL_CALIBRATION = True # Set True to enable manual clicks if auto fails
+MANUAL_CALIBRATION = False
 SHOW_IMAGES = True
 if SHOW_IMAGES == False:
     print(
@@ -27,7 +25,7 @@ camera_positions = []
 
 
 def clear_folder(folder_path):
-    """Removes all files in the directory."""
+    """Removes all files in the directory folder_path."""
     for filename in os.listdir(folder_path):
         file_path = os.path.join(folder_path, filename)
         try:
@@ -40,13 +38,15 @@ def clear_folder(folder_path):
 
 
 def extract_frames(video_path, output_folder, interval_seconds):
-    # Extract frames from a video at specified intervals and save them to an output folder.
+    """Extract frames from a video at specified intervals and save them to an output folder."""
     # Create output directory if it doesn't exist
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
     else:
+        #if output folder already exists, clear it to avoid confusion with old frames
         clear_folder(output_folder)
 
+    # capture video
     cap = cv.VideoCapture(video_path)
     if not cap.isOpened():
         print("Error: Could not open video.")
@@ -111,7 +111,7 @@ def detect_corners_manual(img, fname):
         np.float32,
     )
     H, _ = cv.findHomography(obj4, np.array(clicked, np.float32))
-    # generate full grid
+    # generate full grid of inner corners using homography
     grid = np.zeros((NX * NY, 2), np.float32)
     grid[:, :2] = np.mgrid[0:NX, 0:NY].T.reshape(-1, 2) * SQUARE_SIZE
     ones = np.ones((grid.shape[0], 1), np.float32)
@@ -121,62 +121,120 @@ def detect_corners_manual(img, fname):
     corners = proj.reshape(-1, 1, 2).astype(np.float32)
     return corners, grid
 
+# not needed, but I prefer it for readability and modularity, and it also allows for future expansion if needed
 def calibrate_camera(objpoints, imgpoints, image_shape):
     return cv.calibrateCamera(objpoints, imgpoints, image_shape[::-1], None, None)[1:3]
 
 
-def save_config_xml(cam_idx, mtx, dist, rvec, tvec):
-    file_path = f"data/cam{cam_idx}/config.xml"
-    # Create directory if it doesn't exist
+def save_extrinsics_xml(cam_idx, rvec, tvec):
+    """Saves only the extrinsics (rotation and translation vectors) to an xml."""
+    # Updated file path naming as per your TODO
+    file_path = f"data/cam{cam_idx}/calculated_extrinsics.xml"
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     fs = cv.FileStorage(file_path, cv.FILE_STORAGE_WRITE)
-    fs.write("camera_matrix", mtx)
-    fs.write("distortion_coefficients", dist)
     fs.write("rotation_vector", rvec)
     fs.write("translation_vector", tvec)
     fs.release()
-    print(f"Successfully saved XML: {file_path}")
+    print(f"Successfully saved Extrinsics XML: {file_path}")
 
+def calculate_extrinsics(cam_idx, mtx, dist):
+    """Calculates extrinsics or loads them from XML if the file already exists."""
+    xml_path = f"data/cam{cam_idx}/calculated_extrinsics.xml"
+    
+    # Set global numpy printing options for cleaner console output
+    np.set_printoptions(precision=4, suppress=True)
+    
+    rvec, tvec = None, None
 
-def get_extrinsics(cam_idx, mtx, dist):
-    cap = cv.VideoCapture(f"data/cam{cam_idx}/checkerboard.avi")
-    ret, frame = cap.read()
-    cap.release()
-    if not ret: return
-    
-    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-    
-    # CRITICAL: Detect corners before refining them!
-    found, corners = cv.findChessboardCorners(gray, SIZE, None)
-    
-    if not found:
-        print(f"Auto-detect failed for Cam {cam_idx}. Switching to manual...")
-        corners, _ = detect_corners_manual(frame, f"Cam {cam_idx} Extrinsics")
+    # 1. Load or Calculate rvec and tvec
+    if Path(xml_path).exists() and not MANUAL_CALIBRATION:
+        print(f"\n--- Camera {cam_idx} (Loaded from XML) ---")
+        fs = cv.FileStorage(xml_path, cv.FILE_STORAGE_READ)
+        rvec = fs.getNode("rotation_vector").mat()
+        tvec = fs.getNode("translation_vector").mat()
+        fs.release()
     else:
-        criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-        corners = cv.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
+        print(f"\n--- Camera {cam_idx} (New Calculation) ---")
+        cap = cv.VideoCapture(f"data/cam{cam_idx}/checkerboard.avi")
+        ret, frame = cap.read()
+        cap.release()
+        if not ret: return None
+        
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        found, corners = cv.findChessboardCorners(gray, SIZE, None)
+        
+        if not found:
+            corners, _ = detect_corners_manual(frame, f"Cam {cam_idx} Extrinsics")
+        else:
+            criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+            corners = cv.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
 
-    objp = np.zeros((NX * NY, 3), np.float32)
-    objp[:, :2] = np.mgrid[0:NX, 0:NY].T.reshape(-1, 2) * SQUARE_SIZE
-    
-    success, rvec, tvec = cv.solvePnP(objp, corners, mtx, dist)
-    if success:
-        save_config_xml(cam_idx, mtx, dist, rvec, tvec)
+        objp = np.zeros((NX * NY, 3), np.float32)
+        objp[:, :2] = np.mgrid[0:NX, 0:NY].T.reshape(-1, 2) * SQUARE_SIZE
+        
+        success, rvec, tvec = cv.solvePnP(objp, corners, mtx, dist)
+        if success:
+            save_extrinsics_xml(cam_idx, rvec, tvec)
+
+    # 2. Extract and Print Rotation Matrix and Translation
+    if rvec is not None and tvec is not None:
+        # Convert rvec to 3x3 Rotation Matrix
+        R, _ = cv.Rodrigues(rvec)
+        
+        print(f"Rotation Matrix (R):\n{R}")
+        print(f"Translation Vector (t):\n{tvec}")
+        
+        # Calculate full Projection Matrix for Task 3
+        P = get_extrinsics_as_matrix(mtx, rvec, tvec)
+        
         # Visual Verification
-        axis = np.float32([[3*SQUARE_SIZE,0,0], [0,3*SQUARE_SIZE,0], [0,0,-3*SQUARE_SIZE]]).reshape(-1,3)
-        imgpts, _ = cv.projectPoints(axis, rvec, tvec, mtx, dist)
-        origin = tuple(corners[0].ravel().astype(int))
-        for i, col in enumerate([(0,0,255),(0,255,0),(255,0,0)]):
-            cv.line(frame, origin, tuple(imgpts[i].ravel().astype(int)), col, 5)
-        cv.imshow(f"Cam {cam_idx} Verify", frame); cv.waitKey(0); cv.destroyAllWindows()
+        if SHOW_IMAGES:
+            # We need a frame for verification; reload if we loaded from XML
+            cap = cv.VideoCapture(f"data/cam{cam_idx}/checkerboard.avi")
+            _, frame = cap.read()
+            cap.release()
+            
+            axis = np.float32([[3*SQUARE_SIZE,0,0], [0,3*SQUARE_SIZE,0], [0,0,-3*SQUARE_SIZE]]).reshape(-1,3)
+            # We need the corners for the origin point in visualization
+            gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            _, corners = cv.findChessboardCorners(gray, SIZE, None)
+            
+            if corners is not None:
+                imgpts, _ = cv.projectPoints(axis, rvec, tvec, mtx, dist)
+                origin = tuple(corners[0].ravel().astype(int))
+                for i, col in enumerate([(0,0,255),(0,255,0),(255,0,0)]):
+                    cv.line(frame, origin, tuple(imgpts[i].ravel().astype(int)), col, 5)
+                cv.imshow(f"Cam {cam_idx} Verify", frame)
+                cv.waitKey(1)
+            
+        return P
+    
+    return None
 
+def get_extrinsics_as_matrix(mtx, rvec, tvec):
+    """
+    Calculates the 3x4 Projection Matrix P = K * [R | t].
+    Used to project 3D voxels onto the 2D image plane.
+    """
+    # 1. Convert the rotation vector to a 3x3 rotation matrix
+    R, _ = cv.Rodrigues(rvec)
+    
+    # 2. Create the 3x4 extrinsic matrix [R | t]
+    # We stack R and tvec horizontally
+    extrinsic_matrix = np.hstack((R, tvec.reshape(3, 1)))
+    
+    # 3. Calculate P = K * [R | t]
+    projection_matrix = np.dot(mtx, extrinsic_matrix)
+    
+    
+    return projection_matrix
 
 # Main loop
 video_count = 4
 for i in range(1, video_count + 1):
-    video_path = f"data/cam{i}/intrinsics.avi"
-    images_path = f"data/cam{i}/intrinsics_frames_{i}"  # folder to save the extracted frames from the video
+    video_path = f"data/cam{i}/intrinsics.avi" # provided file to base the intrinsics calibration on
+    images_path = f"data/cam{i}/intrinsics_frames_{i}"  # created folder to save the extracted frames from the videos
 
     # step 1: create video stills from intrinsics.avi
     if CREATE_VIDEO_STILLS == True:
@@ -184,9 +242,13 @@ for i in range(1, video_count + 1):
 
     image_files = glob.glob(os.path.join(images_path, "*.jpg"))
 
-    # step 2: manually detect corners and calibrate camera
-    # code from assignment 1 to display the images and click corners
-    SAVE_JSON = f"data/cam{i}/manual_calibration_data{i}.json"
+    # step 2: manually detect corners and calibrate camera, using code from assignment 1
+    #TODO rename to intrinsiics_data, also remove the 'images' in the json
+    #TODO remove the old image masks
+    #TODO add more post-processing
+    #TODO make a post-processing image compared to the pre-processed image
+
+    SAVE_JSON = f"data/cam{i}/calculated_intrinsics_{i}.json"
     data_to_save = []
     objpoints_list, imgpoints_list = [], []
 
@@ -236,16 +298,14 @@ for i in range(1, video_count + 1):
         gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
         mtx, dist = calibrate_camera(objpoints_list, imgpoints_list, gray.shape)
 
-        # Save everything to JSON
-        #  these are the camera intrinsics
+        # Save the instrinsics to JSON
         full_data = {
             "camera_matrix": mtx.tolist(),
-            "dist_coeffs": dist.tolist(),
-            "images": data_to_save,
+            "dist_coeffs": dist.tolist()
         }
         with open(SAVE_JSON, "w") as f:
             json.dump(full_data, f, indent=4)
         print(f"Saved corner & calibration data to {SAVE_JSON}")
 
     # step 3: get camera extrinsics (position and orientation) using solvePnP for each image, and save the extrinsics to a JSON file.
-    get_extrinsics(i, mtx, dist)
+    calculate_extrinsics(i, mtx, dist)
