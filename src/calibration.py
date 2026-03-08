@@ -346,3 +346,32 @@ for i in range(1, video_count + 1):
     # Final Step: Write the master config
     save_final_config(f"data/cam{i}/master_config_{i}.json", camera_params)
     
+
+    import matplotlib.pyplot as plt
+    
+    from mpl_toolkits.mplot3d import Axes3D
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Collect all camera positions
+    cam_positions = []
+    for i in range(1, 5):
+        fs_ext = cv.FileStorage(f"data/cam{i}/calculated_extrinsics.xml", cv.FileStorage_READ)
+        tvec = fs_ext.getNode("translation_vector").mat()
+        fs_ext.release()
+        cam_positions.append(tvec.flatten())
+
+    cam_positions = np.array(cam_positions)
+
+    # Plot cameras
+    ax.scatter(cam_positions[:, 0], cam_positions[:, 1], cam_positions[:, 2], c='r', marker='o', s=50)
+    for i, pos in enumerate(cam_positions):
+        ax.text(pos[0], pos[1], pos[2], f"Cam {i+1}", color='black')
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title("Camera Positions in 3D")
+    ax.view_init(elev=30, azim=45)
+    plt.show()

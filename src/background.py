@@ -12,6 +12,7 @@ x_range = np.arange(-width // 2, width // 2) * SQUARE_SIZE
 y_range = np.arange(-height, 0) * SQUARE_SIZE  # Negative because engine uses Y-up
 z_range = np.arange(-depth // 2, depth // 2) * SQUARE_SIZE
 
+#todo add gaussian for extra points
 # Create the 3D grid of points
 z, y, x = np.meshgrid(z_range, y_range, x_range, indexing="ij")
 voxel_coords = np.stack((x.ravel(), y.ravel(), z.ravel()), axis=1).astype(np.float32)
