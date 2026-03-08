@@ -1,5 +1,5 @@
 {
-    "H_Thresh": 10,
-    "S_Thresh": 30,
-    "V_Thresh": 50
+    "H_Thresh": 14,
+    "S_Thresh": 62,
+    "V_Thresh": 88
 }

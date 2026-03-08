@@ -6,7 +6,7 @@ import cv2 as cv
 # Grid dimensions
 width, height, depth = 128, 64, 128
 SQUARE_SIZE = 115  # mm
-TUNE_BACKGROUND_SUBTRACTION = False  # Set to True to enable interactive tuning of background subtraction thresholds
+TUNE_BACKGROUND_SUBTRACTION = False # Set to True to enable interactive tuning of background subtraction thresholds
 # Create ranges centered around (0,0,0) on the floor
 x_range = np.arange(-width // 2, width // 2) * SQUARE_SIZE
 y_range = np.arange(-height, 0) * SQUARE_SIZE  # Negative because engine uses Y-up

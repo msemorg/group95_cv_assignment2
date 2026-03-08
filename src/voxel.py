@@ -4,6 +4,9 @@ import json
 import matplotlib.pyplot as plt
 from background import get_foreground_mask, postprocess_foreground_mask
 from skimage import measure
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+
 
 # --- 1. VOXEL GRID ---
 voxel_size = 0.02  # coarse for testing
@@ -54,8 +57,16 @@ for i in range(1,5):
     
 
 # --- 3. CARVE VOXELS (single frame per cam for debugging) ---
+frames_for_color = []
+
 for cam in cams:
     ret, frame = cam["cap"].read()
+    if not ret:
+        print(f"Camera {cam['id']}: cannot read frame")
+        continue
+
+    frames_for_color.append(frame.copy())  # save a copy for later coloring
+
     if not ret:
         print(f"Camera {cam['id']}: cannot read frame")
         continue
@@ -75,9 +86,9 @@ for cam in cams:
     print(f"Camera {cam['id']}: mask coverage = {mask.sum()} pixels ({mask.sum()/mask.size*100:.2f}%)")
 
     # debug plot of mask
-    plt.imshow(mask.astype(np.uint8)*255, cmap='gray')
-    plt.title(f"Camera {cam['id']} mask")
-    plt.show()
+    # plt.imshow(mask.astype(np.uint8)*255, cmap='gray')
+    # plt.title(f"Camera {cam['id']} mask")
+    # plt.show()
 
     # project only occupied voxels
     voxels_f = voxels[occupied].astype(np.float32)
@@ -92,41 +103,6 @@ for cam in cams:
     tmp = np.zeros_like(occupied)
     tmp[np.where(occupied)[0][inside]] = mask[pts2d[inside,1], pts2d[inside,0]]
     occupied &= tmp
-
-    ############
-    # --- DEBUG: DRAW WORLD AXES ON FRAME ---
-    cube_pts = np.float32([
-    [xmin, ymin, zmin],
-    [xmax, ymin, zmin],
-    [xmax, ymax, zmin],
-    [xmin, ymax, zmin],
-    [xmin, ymin, zmax],
-    [xmax, ymin, zmax],
-    [xmax, ymax, zmax],
-    [xmin, ymax, zmax]
-])
-
-    imgpts, _ = cv2.projectPoints(cube_pts, cam["rvec"], cam["tvec"], cam["K"], dist_coeffs)
-    imgpts = imgpts.reshape(-1,2).astype(int)
-
-    debug_frame = frame.copy()
-
-    # bottom square
-    cv2.line(debug_frame, tuple(imgpts[0]), tuple(imgpts[1]), (255,0,0), 3)
-    cv2.line(debug_frame, tuple(imgpts[1]), tuple(imgpts[2]), (255,0,0), 3)
-    cv2.line(debug_frame, tuple(imgpts[2]), tuple(imgpts[3]), (255,0,0), 3)
-    cv2.line(debug_frame, tuple(imgpts[3]), tuple(imgpts[0]), (255,0,0), 3)
-
-    # top square
-    cv2.line(debug_frame, tuple(imgpts[4]), tuple(imgpts[5]), (0,255,0), 3)
-    cv2.line(debug_frame, tuple(imgpts[5]), tuple(imgpts[6]), (0,255,0), 3)
-    cv2.line(debug_frame, tuple(imgpts[6]), tuple(imgpts[7]), (0,255,0), 3)
-    cv2.line(debug_frame, tuple(imgpts[7]), tuple(imgpts[4]), (0,255,0), 3)
-
-    # vertical edges
-    for i in range(4):
-        cv2.line(debug_frame, tuple(imgpts[i]), tuple(imgpts[i+4]), (0,0,255), 3)
-
 
 
     # --- DRAW WORLD AXES ---
@@ -146,7 +122,7 @@ for cam in cams:
     x = tuple(axis_img[1])
     y = tuple(axis_img[2])
     z = tuple(axis_img[3])
-
+    debug_frame = frame.copy()
     # X = red HORIZONTAL PARALLEL TO CAMERA
     cv2.line(debug_frame, o, x, (0,0,255), 4)
 
@@ -158,7 +134,7 @@ for cam in cams:
 
     plt.imshow(cv2.cvtColor(debug_frame, cv2.COLOR_BGR2RGB))
     plt.title(f"Camera {cam['id']} 3D Cube Alignment")
-    plt.show()
+    # plt.show()
     ############
 
 # release videos
@@ -169,27 +145,67 @@ for cam in cams:
 voxels = voxels[occupied]
 print(f"Total occupied voxels = {len(voxels)}")
 
-# --- 5. VISUALIZE ---
-# --- 4. CONVERT VOXEL MASK BACK TO 3D GRID ---
-# Marching cubes needs a structured 3D array (volume), not a list of points
-volume = occupied.reshape(len(xs), len(ys), len(zs))
+# --- 4b. CREATE 3D VOLUME GRID ---
+volume = np.zeros((len(xs), len(ys), len(zs)), dtype=np.uint8)
+# find the indices of the surviving voxels in the grid
+ix = ((voxels[:,0]-xmin)/voxel_size).astype(int)
+iy = ((voxels[:,1]-ymin)/voxel_size).astype(int)
+iz = ((voxels[:,2]-zmin)/voxel_size).astype(int)
+iz = len(zs)-1 - iz
+volume[ix, iy, iz] = 1  # mark as occupied
 
-# --- 5. GENERATE MESH (The "Statue") ---
-# level=0.5 finds the boundary between 0 (empty) and 1 (occupied)
+# --- 5. MARCHING CUBES ---
 verts, faces, normals, values = measure.marching_cubes(volume, level=0.5, spacing=(voxel_size, voxel_size, voxel_size))
+verts += [xmin, ymin, zmin]  # offset to real coords
 
-# Offset vertices to match real-world coordinates
-verts += [xmin, ymin, zmin]
 
-# --- 6. VISUALIZE AS A SOLID ---
-fig = plt.figure(figsize=(10, 10))
+# --- 6. VISUALIZE WITH COLORS FROM IMAGE ---
+from mpl_toolkits.mplot3d import Axes3D  # just to be safe
+
+fig = plt.figure(figsize=(10,10))
 ax = fig.add_subplot(111, projection='3d')
 
-# Fancy rendering of the "statue" surface
-ax.plot_trisurf(verts[:, 0], verts[:, 1], faces, verts[:, 2], 
-                cmap='Spectral', lw=0.1, edgecolors='none')
+cam_img = frames_for_color[0]  # first cam/frame
+cam_img = cv2.cvtColor(cam_img, cv2.COLOR_BGR2RGB)
 
-ax.set_title("3D Statue Reconstruction")
+# project vertices to camera to get pixel colors
+K = cams[0]["K"]
+rvec = cams[0]["rvec"]
+tvec = cams[0]["tvec"]
+dist_coeffs = np.zeros(5)
+
+pts2d, _ = cv2.projectPoints(verts, rvec, tvec, K, dist_coeffs)
+pts2d = np.round(pts2d.reshape(-1,2)).astype(int)
+
+# clamp to image size
+h, w, _ = cam_img.shape
+pts2d[:,0] = np.clip(pts2d[:,0], 0, w-1)
+pts2d[:,1] = np.clip(pts2d[:,1], 0, h-1)
+
+# get RGB color for each vertex
+
+colors = np.zeros((len(verts), 3), dtype=float)
+
+for i, frame in enumerate(frames_for_color):
+    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    K = cams[i]["K"]
+    rvec = cams[i]["rvec"]
+    tvec = cams[i]["tvec"]
+    pts2d, _ = cv2.projectPoints(verts, rvec, tvec, K, np.zeros(5))
+    pts2d = np.round(pts2d.reshape(-1,2)).astype(int)
+    h, w, _ = img.shape
+    pts2d[:,0] = np.clip(pts2d[:,0], 0, w-1)
+    pts2d[:,1] = np.clip(pts2d[:,1], 0, h-1)
+    colors += img[pts2d[:,1], pts2d[:,0]] / 255.0
+
+colors /= len(frames_for_color)
+
+face_colors = colors[faces].mean(axis=1)  # average RGB of the 3 verts in each face
+tri = Poly3DCollection(verts[faces], facecolors=face_colors, edgecolor='none')
+ax.add_collection3d(tri)
+
+ax.set_xlim(xs[0], xs[-1])
+ax.set_ylim(ys[0], ys[-1])
+ax.set_zlim(zs[0], zs[-1])
+ax.set_title("3D Statue with Camera Colors")
 plt.show()
-
-
