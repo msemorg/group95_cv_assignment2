@@ -6,7 +6,7 @@ from background import get_foreground_mask
 
 # --- 1. GLOBAL GRID DEFINITION ---
 # --- RE-CENTERED GRID ---
-VOXEL_SIZE = 0.2  # Keep 2cm resolution
+VOXEL_SIZE = 0.02  # Keep 2cm resolution
 grid_dim_x = 140    # Wider to catch arms
 grid_dim_y = 240   # Taller for full body
 grid_dim_z = 140    # Deeper
@@ -100,20 +100,17 @@ def reconstruct_voxels(voxel_coords, masks, camera_params):
         cv.waitKey(1) # Refresh window
 
     cv.waitKey(1000) # Give you a second to look at the windows
-    
-    # CRITICAL: Start with a lower threshold (e.g., 2 or 3) to see if ANY cameras overlap
-    # If this works but 'votes == 4' doesn't, your calibration is slightly off.
+    # Final thresholding: A voxel is occupied if it has votes from at least 'threshold' cameras
     threshold = len(camera_params) # Change this to 2 or 3 if you see nothing
     return votes >= threshold
 
 
-# --- EXECUTION FLOW ---
-
+# MAIN 
 camera_params = []
 masks = []
 frames = []
 
-print("Loading camera data and generating masks...")
+print("Loading...")
 for i in range(1, 5):
     params = load_camera_params_combined(i)
     if params is None:

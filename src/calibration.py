@@ -15,14 +15,14 @@ if SHOW_IMAGES == False:
     )
 
 NX, NY = 9, 6  # inner corners of chessboard in assignment 2
-SQUARE_SIZE = 0.20  # TODO this is a guessed value for assignment 2. The true value might not be needed, in that case this variable will be removed later.
+SQUARE_SIZE = 0.115  # Meters, taken from checkerboard.xml
 SIZE = (NX, NY)
 
 manual_detections_count = 0
 automatic_detections_count = 0
 data_to_save = []
 camera_positions = []
-
+all_camera_params = {}
 
 def clear_folder(folder_path):
     """Removes all files in the directory folder_path."""
@@ -240,6 +240,19 @@ def get_extrinsics_as_matrix(mtx, rvec, tvec):
     return projection_matrix
 
 
+def save_final_config(output_path, camera_data):
+    """
+    Saves the provided camera parameters to an OpenCV XML/YAML file.
+    """
+    # Note: FileStorage is best for XML (.xml) or YAML (.yaml)
+    fs = cv.FileStorage(output_path, cv.FILE_STORAGE_WRITE)
+    
+    for key, value in camera_data.items():
+        fs.write(key, value)
+        
+    fs.release()
+    print(f"Configuration saved to: {output_path}")
+
 # Main loop
 video_count = 4
 for i in range(1, video_count + 1):
@@ -310,3 +323,26 @@ for i in range(1, video_count + 1):
 
     # step 3: get camera extrinsics (position and orientation) using solvePnP for each image, and save the extrinsics to a JSON file.
     calculate_extrinsics(i, mtx, dist)
+
+    #step 4: get the full config file
+    P = calculate_extrinsics(i, mtx, dist)
+    
+    # Reload rvec/tvec from the XML your function just saved
+    xml_path = f"data/cam{i}/calculated_extrinsics.xml"
+    fs_ext = cv.FileStorage(xml_path, cv.FILE_STORAGE_READ)
+    rvec = fs_ext.getNode("rotation_vector").mat()
+    tvec = fs_ext.getNode("translation_vector").mat()
+    fs_ext.release()
+
+    # Store for the final master file
+    camera_params = {
+        'mtx': mtx,
+        'dist': dist,
+        'rvec': rvec,
+        'tvec': tvec,
+        'P': P
+    }
+
+    # Final Step: Write the master config
+    save_final_config(f"data/cam{i}/master_config_{i}.json", camera_params)
+    
