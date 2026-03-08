@@ -134,8 +134,8 @@ for cam in cams:
 
     plt.imshow(cv2.cvtColor(debug_frame, cv2.COLOR_BGR2RGB))
     plt.title(f"Camera {cam['id']} 3D Cube Alignment")
-    # plt.show()
-    ############
+    plt.show()
+    ###########
 
 # release videos
 for cam in cams:
