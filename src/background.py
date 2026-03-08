@@ -5,14 +5,14 @@ import cv2 as cv
 
 # Grid dimensions
 width, height, depth = 128, 64, 128
-SQUARE_SIZE = 200  # mm
-TUNE_BACKGROUND_SUBTRACTION = False  # Set to True to enable interactive tuning of background subtraction thresholds
+SQUARE_SIZE = 115  # mm
+TUNE_BACKGROUND_SUBTRACTION = True  # Set to True to enable interactive tuning of background subtraction thresholds
 # Create ranges centered around (0,0,0) on the floor
 x_range = np.arange(-width // 2, width // 2) * SQUARE_SIZE
 y_range = np.arange(-height, 0) * SQUARE_SIZE  # Negative because engine uses Y-up
 z_range = np.arange(-depth // 2, depth // 2) * SQUARE_SIZE
 
-#todo add gaussian for extra points
+# todo add gaussian for extra points
 # Create the 3D grid of points
 z, y, x = np.meshgrid(z_range, y_range, x_range, indexing="ij")
 voxel_coords = np.stack((x.ravel(), y.ravel(), z.ravel()), axis=1).astype(np.float32)
@@ -20,6 +20,10 @@ voxel_coords = np.stack((x.ravel(), y.ravel(), z.ravel()), axis=1).astype(np.flo
 
 # This function creates a background model by taking the median of all frames' pixel values.
 def create_background_model(video_path):
+    """creates a background model by taking the median of all frames' pixel values.
+    Args: video path (str)
+    returns:
+    np.ndarray: background image"""
     cap = cv.VideoCapture(video_path)
     frames = []
     while cap.isOpened():
@@ -34,65 +38,70 @@ def create_background_model(video_path):
 
 def get_foreground_mask(frame, background_model, thresholds):
     """
-    Separates the foreground from the background using HSV thresholding,
-    morphological operations, and connected components analysis.
-    Returns: (mask_before_processing, mask_after_processing)
+    Computes the initial foreground mask based on HSV differences.
+
+    Args:
+        frame (np.ndarray): Current BGR frame.
+        background_model (np.ndarray): Background image in BGR.
+        thresholds (tuple[int, int, int]): HSV thresholds.
+
+    Returns:
+        np.ndarray: Binary mask before post-processing.
     """
-    # 1. CHANNEL SEPARATION & THRESHOLDING
-    # Convert both frame and background to HSV
     hsv_frame = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
     hsv_bg = cv.cvtColor(background_model, cv.COLOR_BGR2HSV)
 
-    # Calculate absolute difference for each channel
     diff = cv.absdiff(hsv_frame, hsv_bg)
     h_diff, s_diff, v_diff = cv.split(diff)
 
-    # Apply thresholds for H, S, and V
     _, mask_h = cv.threshold(h_diff, thresholds[0], 255, cv.THRESH_BINARY)
     _, mask_s = cv.threshold(s_diff, thresholds[1], 255, cv.THRESH_BINARY)
     _, mask_v = cv.threshold(v_diff, thresholds[2], 255, cv.THRESH_BINARY)
 
-    # Combine channels: pixel is foreground if any channel shows a significant difference
     mask_before = cv.bitwise_or(mask_h, cv.bitwise_or(mask_s, mask_v))
+    return mask_before
 
-    # 2. MORPHOLOGICAL CLEANUP (PRE-PROCESSING FOR BLOB DETECTION)
-    # We use a 5x5 elliptical kernel to bridge small gaps so limbs stay connected to the body
+
+def postprocess_foreground_mask(mask_before):
+    """
+    Cleans up and refines the initial foreground mask.
+
+    Args:
+        mask_before (np.ndarray): Initial binary mask.
+
+    Returns:
+        np.ndarray: Post-processed mask keeping only the largest blob and smoothing edges.
+    """
     kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
-
-    # Close internal holes first
     mask_processed = cv.morphologyEx(mask_before, cv.MORPH_CLOSE, kernel, iterations=2)
 
-    # 3. CONNECTED COMPONENTS ANALYSIS
-    # This finds every "island" of white pixels and labels them
-    # stats contains the AREA of each island
     num_labels, labels, stats, _ = cv.connectedComponentsWithStats(
         mask_processed, connectivity=8
     )
-
-    # Create an empty black image to draw only our "main" subject
     mask_after = np.zeros_like(mask_processed)
 
-    # If blobs were found (index 0 is always the background)
     if num_labels > 1:
-        # Get areas of all blobs except the background (index 0)
         blob_areas = stats[1:, cv.CC_STAT_AREA]
-
-        # Find the index of the largest blob
         largest_label = 1 + np.argmax(blob_areas)
-
-        # Only keep the pixels belonging to the largest blob
         mask_after[labels == largest_label] = 255
 
-    # 4. FINAL POLISH
-    # A small dilation helps smooth out the edges for a better voxel projection
     mask_after = cv.dilate(mask_after, kernel, iterations=1)
-
-    return mask_before, mask_after
+    return mask_after
 
 
 def tune_background_subtraction(video_path, background_model, cam_id, save_dir):
+    """provides an interactive interface to tune the HSV values
+       Args:
+        video_path (str): Path to the video used for tuning.
+        background_model (np.ndarray): Background image for comparison.
+        cam_id (int): Camera identifier for naming saved files.
+        save_dir (str): Directory to save tuned thresholds and mask images.
+
+    Returns:
+        tuple[int, int, int] | None: The final H, S, V thresholds if tuning is completed, else None.
+    """
     cap = cv.VideoCapture(video_path)
-    window_name = f"TTTTuning_Cam_{cam_id}"
+    window_name = f"Tuning_Cam_{cam_id}"
     cv.namedWindow(window_name)
 
     cv.createTrackbar("H_Thresh", window_name, 10, 255, lambda x: None)
@@ -113,10 +122,11 @@ def tune_background_subtraction(video_path, background_model, cam_id, save_dir):
         s_t = cv.getTrackbarPos("S_Thresh", window_name)
         v_t = cv.getTrackbarPos("V_Thresh", window_name)
 
-        # Receive both masks
-        m_before, m_after = get_foreground_mask(
-            frame, background_model, (h_t, s_t, v_t)
-        )
+        # Get initial mask
+        m_before = get_foreground_mask(frame, background_model, (h_t, s_t, v_t))
+        
+        # Post-process the mask
+        m_after = postprocess_foreground_mask(m_before)
 
         cv.imshow("Foreground Mask (After)", m_after)
         cv.imshow("Original", frame)
@@ -188,5 +198,8 @@ for i in range(1, video_count + 1):
         # BGR is too sensitive to lighting changes, whereas HSV separates color from brightness which separates easier
         bg_model = cv.imread(f"data/cam{i}/bg_model.png")
         thresholds = tune_background_subtraction(
-            f"data/cam{i}/video.avi", bg_model, cam_id=i, save_dir="data/tuned_settings"
+            f"data/cam{i}/video.avi",
+            bg_model,
+            cam_id=i,
+            save_dir = f"data/cam{i}"
         )
